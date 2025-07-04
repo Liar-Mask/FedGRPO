@@ -1,0 +1,14 @@
+# 匹配以log fig 开头的文件和目录
+log*
+fig*
+__pycache__/
+#排除readme.md
+!readme.md
+# 匹配任何名字带有 test 的文件和目录（如果你忽略了整个目录，这个模式就不起作用）
+test
+test_reward/
+output_models/
+*.pth
+orm/
+.ipynb_checkpoints/
+wandb/
