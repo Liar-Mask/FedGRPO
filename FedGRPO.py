@@ -16,7 +16,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
-
+import random
 import datasets
 import torch
 import transformers
@@ -35,13 +35,14 @@ from rewards import (
     len_reward,
     reasoning_steps_reward,
     tag_count_reward,
+    model_reward,
 )
 from utils import get_tokenizer
 from utils.callbacks import get_callbacks
 from utils.wandb_logging import init_wandb_training
 from trl import GRPOTrainer, ModelConfig, ScriptArguments, TrlParser, get_peft_config
 from exp_dataset.pre_datasets import get_dataset, get_dataset_fedgrpo
-from utils.trainer import FedGRPOTrainer
+from utils.trainer import FedGRPOTrainer, FedGRPOTrainer_RewardModel
 
 # os.environ["WANDB_DISABLED"] = "true"
 os.environ["WANDB_MODE"] = "offline"
@@ -116,6 +117,10 @@ class GRPOScriptArguments(ScriptArguments):
         default=0.0,
         metadata={"help": "dataset ration for fedgrpo"},
     )
+    max_num_train_samples: int = field(
+        default=-1,
+        metadata={"help": "Chose certain samples for fast check"},
+    )
 
 def main(script_args, training_args, model_args):
     # Set seed for reproducibility
@@ -187,15 +192,19 @@ def main(script_args, training_args, model_args):
     # print('dataset #zgx', dataset)
     ## load dataset original
 
-    dataset = get_dataset_fedgrpo(script_args.dataset_name, local_data_dir = '../llm_datasets')
-
+    # dataset = get_dataset_fedgrpo(script_args.dataset_name, local_data_dir = '../llm_datasets')
+    dataset = get_dataset(script_args.dataset_name)
     
+    import pprint
+    pprint.pprint(dataset[0])
     # Note: Use a small dataset for fast check. Should be commented in production!
     # Make sure it's called after data preprocessing
     if script_args.max_num_train_samples is not None and script_args.max_num_train_samples > 0:
+        random.seed(training_args.seed)
         num_samples = min(script_args.max_num_train_samples, len(dataset))
         sample_ids = random.sample(range(len(dataset)), num_samples)
         dataset = dataset.select(sample_ids)   
+    
 
     ################
     # Load tokenizer
@@ -203,18 +212,21 @@ def main(script_args, training_args, model_args):
     tokenizer = get_tokenizer(model_args, training_args)
 
         # -----------------------------------
-    # Add special tokens when necessary?
-    print("-"*100)
-    special_tokens = ["<think>", "</think>", "<answer>", "</answer>"]
-    for token in special_tokens:
-        token_id = tokenizer.convert_tokens_to_ids(token)
-        # If token is not included in vocabulary, add it
-        if token_id == tokenizer.unk_token_id:
-            tokenizer.add_tokens([token])
-            logger.warning(f"'{token}' is not in the vocabulary, add it now.")
-        else:
-            logger.info(f"'{token}' is already in the vocabulary.")
-    print("-"*100)
+    # # Add special tokens when necessary?
+    # print("-"*100)
+    # special_tokens = ["<think>", "</think>", "<answer>", "</answer>"]
+    # for token in special_tokens:
+    #     token_id = tokenizer.convert_tokens_to_ids(token)
+    #     # If token is not included in vocabulary, add it
+    #     if token_id == tokenizer.unk_token_id:
+    #         tokenizer.add_tokens([token])
+    #         logger.warning(f"'{token}' is not in the vocabulary, add it now.")
+    #     else:
+    #         logger.info(f"'{token}' is already in the vocabulary.")
+    # tokenizer.save_pretrained('output_models/fedgrpo_2507/tokenizer_0710')
+    # print('tokenizer saved successfully!')
+
+    # print("-"*100)
 
     # Get reward functions
     REWARD_FUNCS_REGISTRY = {
@@ -236,6 +248,7 @@ def main(script_args, training_args, model_args):
         "code": code_reward,
         "code_format": get_code_format_reward(language=script_args.code_language),
         "tag_count": tag_count_reward,
+        "model_reward": model_reward,
     }
     reward_funcs = [REWARD_FUNCS_REGISTRY[func] for func in script_args.reward_funcs]
 
@@ -251,9 +264,21 @@ def main(script_args, training_args, model_args):
         return {"prompt": prompt}
 
     dataset = dataset.map(make_conversation)
+
+    eval_dataset = None
+    # eval_dataset_name='nlile/hendrycks-MATH-benchmark'
+    # eval_dataset_name='HuggingFaceH4/MATH-500'
+    eval_dataset_name = None
+    if eval_dataset_name:
+        eval_dataset = get_dataset(
+            eval_dataset_name, split='test'
+        )
+        eval_dataset=eval_dataset.map(make_conversation)
+
     if "messages" in dataset.column_names:
             dataset = dataset.remove_columns("messages")
-
+    print('dataset[0]')
+    pprint.pprint(dataset[0])
     # for split in dataset:
     #     if "messages" in dataset[split].column_names:
     #         dataset[split] = dataset[split].remove_columns("messages")
@@ -270,6 +295,15 @@ def main(script_args, training_args, model_args):
         use_cache=False if training_args.gradient_checkpointing else True,
     )
     training_args.model_init_kwargs = model_kwargs
+
+
+    # # 修改model的embedding size以适应新增的tokens
+    # from transformers import AutoModelForCausalLM, AutoTokenizer
+    # model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+    # model.resize_token_embeddings(len(tokenizer), pad_to_multiple_of=8)
+    # print(f"Updated model token embedding: {model.model.embed_tokens}")
+    # if model.config.vocab_size is not None:
+    #     assert len(tokenizer) <= model.config.vocab_size, "Mismatch: model vocab_size < tokenizer vocab_size"
 
     #############################
     # Initialize the GRPO trainer
@@ -300,7 +334,7 @@ def main(script_args, training_args, model_args):
         lora_dropout=0.1,  # Dropout 比例
     )
     # print('training_args.dataset_text_field:', training_args.dataset_text_field)
-    if '7B' in model_args.model_name_or_path:
+    if '14B' in model_args.model_name_or_path:
         trainer = FedGRPOTrainer(
             model=model_args.model_name_or_path,
             reward_funcs=reward_funcs,
@@ -318,12 +352,24 @@ def main(script_args, training_args, model_args):
             reward_funcs=reward_funcs,
             args=training_args,
             train_dataset=dataset, #[script_args.dataset_train_split],
+            eval_dataset=eval_dataset,
             # eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
             # peft_config=get_peft_config(model_args),
             # peft_config = peft_config,
             callbacks=get_callbacks(training_args, model_args),
             processing_class=tokenizer,
-        )        
+        ) 
+        # trainer = FedGRPOTrainer_RewardModel(
+        #     model=model_args.model_name_or_path,
+        #     reward_funcs=reward_funcs,
+        #     args=training_args,
+        #     train_dataset=dataset, #[script_args.dataset_train_split],
+        #     # eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        #     # peft_config=get_peft_config(model_args),
+        #     # peft_config = peft_config,
+        #     callbacks=get_callbacks(training_args, model_args),
+        #     processing_class=tokenizer,
+        # )         
 
     ###############
     # Training loop
@@ -346,6 +392,7 @@ def main(script_args, training_args, model_args):
     # Save model and create model card
     ##################################
     logger.info("*** Save model ***")
+    trainer.model.generation_config.eos_token_id = tokenizer.eos_token_id
     trainer.save_model(training_args.output_dir)
     logger.info(f"Model saved to {training_args.output_dir}")
 
@@ -359,6 +406,8 @@ def main(script_args, training_args, model_args):
         # Restore k,v cache for fast inference
         trainer.model.config.use_cache = True
         trainer.model.config.save_pretrained(training_args.output_dir)
+        # 0710  Save tokenizer for the added special tokens (<think>, </think>, <answer>, </answer>)
+        # tokenizer.save_pretrained(training_args.output_dir)
 
     ##########
     # Evaluate

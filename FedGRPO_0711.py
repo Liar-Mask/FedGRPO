@@ -144,6 +144,10 @@ class GRPOScriptArguments(ScriptArguments):
             "
         },
     )
+    max_num_train_samples: int = field(
+        default=-1,
+        metadata={"help": "Chose certain samples for fast check"},
+    )
 
 
 def main(script_args, training_args, model_args):

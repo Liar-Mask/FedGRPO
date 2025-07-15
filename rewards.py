@@ -400,3 +400,137 @@ def get_code_format_reward(language: str = "python"):
         return [1.0 if match else 0.0 for match in matches]
 
     return code_format_reward
+
+
+def extract_answer(contents):
+    answer_parsed_list = []
+    for content in contents:
+        answer_parsed = parse(
+            content,
+            extraction_config=[
+                LatexExtractionConfig(
+                    normalization_config=NormalizationConfig(
+                        nits=False,
+                        malformed_operators=False,
+                        basic_latex=True,
+                        equations=True,
+                        boxed="all",
+                        units=True,
+                    ),
+                    # Ensures that boxed is tried first
+                    boxed_match_priority=0,
+                    try_extract_without_anchor=False,
+                )
+            ],
+            extraction_mode="first_match",
+        )
+        if len(answer_parsed) == 0:
+            # If the answer is not parseable, we skip this example
+            
+            # print(f"Failed to parse answer: {content[-100:]}")
+            # print(f'The gold_parsed: {gold_parsed}')
+
+            
+            import re
+            m = re.search(r"<answer>\s*([\w\.\-eE]+)\s*</answer>", content)
+            if m:
+                answer_text = m.group(1).strip()
+                # 去除末尾的句号
+                answer_text = answer_text.rstrip(".")
+                # 如果是纯数字，转为 LaTeX
+                if re.fullmatch(r"[\d\.\-eE]+", answer_text):
+                    answer_parsed = parse(
+                        f"\\({answer_text}\\)",
+                        extraction_mode="first_match",
+                    )
+                # 如果是单个大写字母选项
+                elif re.fullmatch(r"[A-Z]", answer_text):
+                    answer_parsed = [answer_text]
+                else:
+                    answer_parsed = []
+        answer_parsed_list.append(answer_parsed)
+    return answer_parsed_list
+
+def compare_answer(reward_answers, model_answers):
+    # print('# debug--compare_answer: ', reward_answer, ' with ', model_answer)
+    rewards = []
+    for reward_answer, model_answer in zip(reward_answers, model_answers):
+        try:
+            reward = float(verify(model_answer, reward_answer))
+        except Exception as e:
+            print(f"Verify failed: {e}, reward_answers: {reward_answer}, server_model_answers: {model_answer}")
+            reward = 0.0
+        rewards.append(reward)
+    return rewards
+
+import asyncio
+from utils.vllm_query import vllm_evaluate
+from utils.vllm_query_plus import vllm_evaluate_optimized
+def model_reward(completions, **kwargs):
+    """
+    Get the reward score for a batch of prompts and completions using the reward model.
+    
+    Args:
+        prompts (list[str]): List of prompt strings.
+        completions (list[str]): List of completion strings.
+    
+    Returns:
+        torch.Tensor: Reward scores for the batch.
+    """
+    reward_url_dict = {
+        'Algebra': 'http://localhost:8002/v1/chat/completions',
+        'Intermediate Algebra': 'http://localhost:8002/v1/chat/completions',
+        'Prealgebra': 'http://localhost:8002/v1/chat/completions',
+        'Number Theory': 'http://localhost:8003/v1/chat/completions',
+        'Geometry': 'http://localhost:8003/v1/chat/completions',
+        'Precalculus': 'http://localhost:8004/v1/chat/completions',
+        'Counting & Probability': 'http://localhost:8004/v1/chat/completions'
+    }
+
+    MODEL_PATH1='output_models/grpo_reward/Qwen2.5-Math-1.5B_data-MATH-benchmark-Intermediate_Algebra_Prealgebra_client1_date-2025-07-04'
+    MODEL_PATH2='output_models/grpo_reward/Qwen2.5-Math-1.5B_data-MATH-benchmark-Number_Theory_Geometry_client0_date-2025-07-04'
+    MODEL_PATH3='output_models/grpo_reward/Qwen2.5-Math-1.5B_data-MATH-benchmark-Precalculus_Counting_&_Probability_client0_date-2025-07-04'
+
+    reward_model_name_dir = {
+        'Algebra': MODEL_PATH1,
+        'Intermediate Algebra': MODEL_PATH1,
+        'Prealgebra': MODEL_PATH1,
+        'Number Theory': MODEL_PATH2,
+        'Geometry': MODEL_PATH2,
+        'Precalculus': MODEL_PATH3,
+        'Counting & Probability': MODEL_PATH3
+    }
+    # dict_keys(['prompts', 'completion_ids', 'problem', 'solution', 'answer', 'subject', 'level', 'unique_id'])
+    if 'prompts' in kwargs.keys():
+        prompts = kwargs['prompts']
+    else:
+        print(f'input.keys(): {kwargs.keys()}')
+        print("Error! Reward input can not have 'prompt' column")
+
+    for key in kwargs.keys():
+        if key in ['subject', 'problem_type']:
+            problem_types = kwargs[key]  
+            break  
+
+    reward_prompts = [per_prompt[1]['content'] for per_prompt in prompts]
+
+    vllm_urls = [reward_url_dict[math_type] for math_type in problem_types]
+    # Get reward scores using vLLM
+    reward_model_names = [reward_model_name_dir[math_type] for math_type in problem_types]
+    reward_texts = asyncio.run(
+        vllm_evaluate_optimized(vllm_urls, reward_prompts, reward_model_names)
+    )
+    # 从reward model的回答中提取答案
+    # 将该答案与server model的答案对比，打分
+    reward_answer = extract_answer(reward_texts)
+    print('#zgx len completions:', len(completions))
+    completion_texts = [per_completion[0]['content'] for per_completion in completions]
+    server_answer = extract_answer(completion_texts)
+    print(f'reward_answer: {reward_answer}')
+    print(f'server_answer: {server_answer}')
+    reward_scores = compare_answer(reward_answer, server_answer)
+
+    # Handle None values
+    reward_scores = [reward_score if reward_score is not None else torch.nan for reward_score in reward_scores]
+
+    return reward_scores

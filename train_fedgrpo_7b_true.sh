@@ -1,8 +1,6 @@
 # Train via command line
 
 
-
-model_name_or_path=Qwen/Qwen2.5-1.5B
 # model_name_or_path=Qwen/Qwen2.5-1.5B-Instruct
 # model_name_or_path=Qwen/Qwen2.5-Math-1.5B
 # model_name_or_path=Qwen/Qwen2.5-Math-1.5B-Instruct
@@ -12,15 +10,12 @@ model_name_or_path=Qwen/Qwen2.5-1.5B
 # model_name_or_path=meta-llama/Llama-3.2-1B-Instruct
 
 # model_name_or_path=Qwen/Qwen2.5-3B
-model_name_or_path=../llm_models/Qwen2.5-Math-1.5B
-
-# CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model \
-#  $model_name_or_path --gpu_memory_utilization 0.85 
+model_name_or_path=../llm_models/Qwen2.5-Math-7B
 
 
 # train_dataset=openai/gsm8k
+train_dataset=../llm_datasets/Openr1-Math-46k-orginal
 train_dataset=nlile/hendrycks-MATH-benchmark
-train_dataset='../llm_datasets/MATH-benchmark-reward-grpo/train'
 # train_dataset=meta-math/MetaMathQA
 # train_dataset=SynthLabsAI/Big-Math-RL-Verified
 # train_dataset=hiyouga/math12k
@@ -30,24 +25,22 @@ train_dataset='../llm_datasets/MATH-benchmark-reward-grpo/train'
 # train_dataset=RUC-AIBOX/STILL-3-Preview-RL-Data
 # train_dataset=Maxwell-Jia/AIME_2024
 
+# CUDA_VISIBLE_DEVICES=4,5 trl vllm-serve \
+#     --model ../llm_models/Qwen2.5-Math-7B \
+#     --gpu_memory_utilization 0.9 \
+#     --tensor_parallel_size 2 \
+#     --data_parallel_size 1 
 
 eval_dataset=HuggingFaceH4/MATH-500
 # eval_dataset=opencompass/AIME2025
 
-train_mode='reward_train'
-problem_types='Intermediate_Algebra Prealgebra'
-problem_types='Number_Theory Geometry'
-problem_types='Precalculus Counting_&_Probability'
-problem_types='Algebra'
-client_id=0
 
 model_name=$(basename $model_name_or_path)
 # run_name=$model_name-$(date +%Y-%m-%d)
-# run_name=${model_name}_data-$(basename $train_dataset)_date-$(date +%Y-%m-%d)
-run_name=${model_name}_data-MATH-benchmark-${problem_types// /_}_client${client_id}_date-$(date +%Y-%m-%d)
+run_name=${model_name}_data-$(basename $train_dataset)_date-$(date +%Y-%m-%d)_beta0.01
 
 
-OUTPUT_DIR=output_models/grpo_reward/$run_name
+OUTPUT_DIR=output_models/fedgrpov2_2507/$run_name
 LOG_FILE="$OUTPUT_DIR/train_log_$(date +%Y-%m-%d_%H:%M:%S.log)"
 
 mkdir -p $OUTPUT_DIR
@@ -67,7 +60,7 @@ echo
 
 MASTER_PORT=$(shuf -n 1 -i 10000-65535)
 
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 # export CUDA_VISIBLE_DEVICES=2
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -79,26 +72,24 @@ export HF_HOME=../.cache/huggingface
 accelerate launch \
     --main_process_port $MASTER_PORT \
     --config_file recipes/accelerate_configs/zero2.yaml \
-    --num_processes=1 \
-GRPO.py \
-    --config recipes/Qwen2.5-Math-1.5B/config_demo_mathlight.yaml \
+    --num_processes=4 \
+FedGRPO.py \
+    --config recipes/grpo_config.yaml \
     --output_dir $OUTPUT_DIR \
     --model_name_or_path $model_name_or_path \
     --dataset_name $train_dataset \
-    --train_mode $train_mode \
-    --problem_types $problem_types \
-    --client_id $client_id \
     --num_train_epochs 1 \
-    --num_generations 6 \
-    --per_device_train_batch_size 12 \
+    --num_generations 8 \
+    --per_device_train_batch_size 4 \
     --per_device_eval_batch_size 12 \
-    --gradient_accumulation_steps 3 \
+    --gradient_accumulation_steps 5 \
     --num_iterations 3 \
     --torch_empty_cache_steps 1 \
-    --max_completion_length 2048 \
+    --max_num_train_samples 2000 \
+    --max_completion_length 4096 \
     --use_vllm True \
-    --vllm_gpu_memory_utilization 0.25 \
-    --vllm_mode colocate \
+    --vllm_gpu_memory_utilization 0.1 \
+    --vllm_mode server \
     --vllm_server_host 0.0.0.0 \
     --vllm_server_port 8000 \
     --reward_funcs accuracy format tag_count \
@@ -110,11 +101,12 @@ GRPO.py \
     --epsilon_high 0.3 \
     --temperature 1.0 \
     --top_p 0.95 \
-    --beta 0.0001 \
+    --beta 0.01 \
     --lr_scheduler_type constant \
     --learning_rate 3e-6 \
-    --save_strategy steps \
-    --save_steps 100 \
+    --save_strategy epoch \
+    --save_steps 400 \
+    --eval_on_start False \
     --log_level info \
     --wandb_project grpo-$(basename $train_dataset) \
     --run_name $run_name \

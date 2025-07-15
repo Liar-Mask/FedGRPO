@@ -16,8 +16,15 @@ def extract_assistant_response_(input_dict):
 
     
 def extract_assistant_response(input_dict):
-    contents = input_dict[0]['choices']
-    print('len text #zgx:', len(contents))
+    # print('#zgx len(input_dict)', len(input_dict))
+    # check the input type
+    if isinstance(input_dict, list):
+        contents = [input_dict[i]['choices'][0] for i in range(len(input_dict))]
+    elif isinstance(input_dict, dict):
+        contents = input_dict['choices']
+    else:
+        raise TypeError("input_dict must be a dict or list")
+    # print('len text #zgx:', len(contents))
     clean_contents = []
     for content in contents:
         assistant_section = content['message']['content']
@@ -30,7 +37,7 @@ def extract_assistant_response(input_dict):
     else:
         return clean_contents
 
-async def query_model(url, prompt, model_name):
+async def query_model_reward_gen(url, prompt, model_name):
     system_prompt = "You are a helpful AI Assistant that provides well-reasoned and detailed responses. You first think about the reasoning process as an internal monologue and then provide the user with the answer. Respond in the following format: <think>\n...\n</think>\n<answer>\n...\n</answer>"
     async with aiohttp.ClientSession() as session:
         # data = {"prompt": prompt, "max_tokens": 1024}
@@ -50,7 +57,51 @@ async def query_model(url, prompt, model_name):
         async with session.post(url, json=data) as resp:
             return await resp.json()
 
-async def vllm_evaluate(vllm_url, batch_texts, model_name):
+async def query_model(url, prompt, model_name):
+    system_prompt = "You are a helpful AI Assistant that provides well-reasoned and detailed responses. You first think about the reasoning process as an internal monologue and then provide the user with the answer. Respond in the following format: <think>\n...\n</think>\n<answer>\n...\n</answer>"
+    async with aiohttp.ClientSession() as session:
+        # data = {"prompt": prompt, "max_tokens": 1024}
+        data = {
+            "model": model_name, 
+            "messages": [
+            {"role": "system", "content": system_prompt}, # 系统消息
+            {"role": "user", "content": prompt} # 将 prompt 包装成 messages 列表
+            ],
+            # "prompt": prompt,  # 结构化消息列表
+            "max_tokens": 2048,
+            # "n": 8,
+            "temperature": 1.0,
+            "top_p": 0.95,
+            # "repetition_penalty":1.2
+        }
+        async with session.post(url, json=data) as resp:
+            return await resp.json()
+
+async def vllm_evaluate(vllm_urls, batch_texts, model_names):
+
+    tasks = [ query_model(vllm_url, prompt, model_name) for vllm_url, prompt, model_name in zip(vllm_urls, batch_texts, model_names)
+        ]
+    results = await asyncio.gather(*tasks)
+    print(results[0])
+    # print(results[1])
+    # print(results[2])
+    print('len(vllm_resluts) #zgx:', len(results)) #40
+    # print('len(vllm_resluts) #zgx:', len(results['text']))
+    eval_texts = []
+    if len(results)>1:
+        for result in results:
+            # import pprint
+            # pprint.pprint(results)
+            eval_texts.append(extract_assistant_response(result))
+    else:
+        # import pprint
+        # pprint.pprint(results)
+        # print('#zgx', results)
+        eval_texts = extract_assistant_response(results)
+    print(f'len eval_texts : {len(eval_texts)}')
+    return eval_texts
+
+async def vllm_evaluate_old(vllm_url, batch_texts, model_name):
     # system_prompt = """As a mathematical problem-solving evaluator, your output MUST strictly follow this structure:
 
     # ### Analysis Report

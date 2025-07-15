@@ -80,16 +80,11 @@ def simplerl_template(question: str):
         + question
         + '\nPlease reason step by step, and put your final answer within\\boxed{{}}.<|im_end|>\n<|im_start|>assistant\n'
     )
-def fedgrpo_template(question: str):
-    return (
-        '<|im_start|>system\nYou are a helpful AI Assistant that provides well-reasoned and detailed responses.\nFor a given question, you should first think the reasoning process in the mind step by step and then provide the user with the answer.\nThe reasoning process and answer must be enclosed within <think> </think> and <answer> </answer> tags, respectively.\nYou must use the following format:\n<think>\n<put your think process here>\n</think>\n<answer>\n<put your final answer here, do not include anything else except for the final answer>\n</answer>.<|im_end|>\n<|im_start|>user\n'
-        + question
-        + "<|im_end|>\n<|im_start|>assistant\n"
-    )
 
 def main(input_file, output_file, model_path, debug=False, remove_system=True, template='own', temperature=0.6, top_p=1.0, max_tokens=8192, n=1, force_generate=True, add_think_before_answer=False, add_oat_evaluate=False, any_true=False, skip_scoring=False, output_eval=None, no_split_think=False):
     # n=32
     # force_generate = False
+    # max_tokens=4096
     df = pd.read_parquet(input_file)
     dec_output_path = output_file.replace('.jsonl', '') + '.decoded.jsonl'
 
@@ -233,61 +228,10 @@ def main(input_file, output_file, model_path, debug=False, remove_system=True, t
 
 def generate_vllm(messages, model_path, template='own', temperature=0.6, top_p=0.95, max_tokens=8192, n=1):
     #vllm模型加载
-    # tokenizer_path = 'output_models/grpo/Qwen2.5-Math-7B_data-hendrycks-MATH-benchmark_date-2025-07-05'
-    # tokenizer_path = '../simpleR1/outputs/models/Qwen2.5-3B_data-hendrycks-MATH-benchmark_date-2025-06-29'
-    # tokenizer_path = '../llm_models/Qwen2.5-Math-7B'
-    tokenizer_path = model_path
-    # tokenizer_path = 'output_models/fedgrpo_2507/Qwen2.5-3B_data-hendrycks-MATH-benchmark_date-2025-07-11_0710_n32'
-    # tokenizer = AutoTokenizer.from_pretrained(tokenizer_path, trust_remote_code=True)
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
     # max_tokens is for the maximum length for generation.
-    
-
-    # 2. (关键步骤) 检查并设置 pad_token
-    # Qwen系列模型通常没有默认的 pad_token，这在批量推理时可能导致问题。
-    # 将其设置为 eos_token 是一个安全且常见的做法。
-    # if tokenizer.pad_token is None:
-    #     tokenizer.pad_token = tokenizer.eos_token
-    #     print(f"pad_token 未设置, 已将其设置为 eos_token: {tokenizer.eos_token}")
-
-    # # 3. (关键步骤) 获取所有需要停止的 token ID
-    # # 对于Qwen Chat模型，<|im_end|> 是一个重要的停止符。
-    # # 我们将它和常规的 eos_token 一起作为停止条件。
-    # stop_token_ids = []
-    
-    # # 获取<|im_end|>的ID
-    # im_end_token_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
-    # if isinstance(im_end_token_id, int):
-    #     stop_token_ids.append(im_end_token_id)
-    #     print(f"添加了停止符 <|im_end|> (ID: {im_end_token_id})")
-
-    # # 获取常规的EOS token ID
-    # if tokenizer.eos_token_id is not None:
-    #     stop_token_ids.append(tokenizer.eos_token_id)
-    #     print(f"添加了停止符 eos_token (ID: {tokenizer.eos_token_id})")
-    
-    # # 去重，以防 pad_token 和 eos_token 相同
-    # stop_token_ids = list(set(stop_token_ids))
-    # if not stop_token_ids:
-    #     print("警告: 未找到任何有效的 stop_token_id。推理可能不会正常停止。")
-
-    stop_tokens = ["<|im_end|>", "<|endoftext|>"]
-    stop_token_ids = tokenizer.convert_tokens_to_ids(stop_tokens)
-    print(f"Using stop tokens: {stop_tokens} with IDs: {stop_token_ids}")
-
-    # sampling_params = SamplingParams(temperature=temperature, top_p=top_p, max_tokens=8192, n=n, stop_token_ids=stop_token_ids )
-    stop_tokens = ["<|im_end|>", "<|endoftext|>", "====="]
-    sampling_params = SamplingParams(temperature=temperature, \
-        top_p=top_p, \
-        max_tokens=max_tokens, \
-        n=n, \
-        stop=stop_tokens,\
-        # repetition_penalty=1.2 
-        )
-    print('#debug--sampling_params:', sampling_params)
- 
-    print(torch.cuda.device_count())
-    # llm = LLM(model=model_path, tensor_parallel_size=torch.cuda.device_count(), gpu_memory_utilization=0.85, trust_remote_code=True)  # 替换成本地路径
+    sampling_params = SamplingParams(temperature=temperature, top_p=top_p, max_tokens=8192, n=n)
+    print('Device_count:', torch.cuda.device_count())
     llm = LLM(model=model_path, tensor_parallel_size=torch.cuda.device_count(), gpu_memory_utilization=0.85)  # 替换成本地路径
 
     gen_prompts = []
@@ -299,8 +243,6 @@ def generate_vllm(messages, model_path, template='own', temperature=0.6, top_p=0
                 tokenize=False,
                 add_generation_prompt=True
             )
-        elif template == 'fedgrpo':
-            gen_prompt = fedgrpo_template(cur_message[0]['content'])
         elif template == 'simplerl':
             gen_prompt = simplerl_template(cur_message[0]['content'])
         elif template == 'qwen':
@@ -318,8 +260,23 @@ def generate_vllm(messages, model_path, template='own', temperature=0.6, top_p=0
         if i == 0:
             print('Example input: ', gen_prompt)
 
-    outputs = llm.generate(gen_prompts, sampling_params)
-    return outputs
+    all_outputs = []
+
+    batch_size=256
+    from tqdm import tqdm
+    for i in tqdm(range(0, len(gen_prompts), batch_size), desc="Processing batches"):
+        batch_prompts = gen_prompts[i:i + batch_size]
+        # 对每个小批次调用generate
+        batch_outputs = llm.generate(batch_prompts, sampling_params)
+        all_outputs.extend(batch_outputs)
+        if i > 0:
+            print(batch_outputs[0].outputs[0].text)
+            # print(batch_outputs[1].outputs[0].text)
+            print('>>>'*20)
+            break
+    # outputs = llm.generate(gen_prompts, sampling_params)
+
+    return all_outputs
 
 if __name__ == "__main__":
     import fire

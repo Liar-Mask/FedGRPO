@@ -43,6 +43,17 @@ CUDA_VISIBLE_DEVICES=1 ACCELERATE_LOG_LEVEL=info accelerate launch \
     --config recipes/${model_name}/config_demo_mathlight.yaml \
     >> $log_dir/${model_name}-mathlight-fedgrpo-lenrward-2048-0624-lr5e6.log 2>&1 
 
+model_name=Qwen2.5-3B
+CUDA_VISIBLE_DEVICES=7 ACCELERATE_LOG_LEVEL=info accelerate launch \
+    --config_file recipes/accelerate_configs/zero2.yaml \
+    --num_processes=1 FedGRPO.py \
+    --config recipes/Qwen2.5-3B-Instruct/config_demo_mathlight.yaml \
+    --vllm_mode server \
+    --vllm_server_host 0.0.0.0 \
+    --vllm_server_port 8003 \
+    --max_num_train_samples 2000 \
+    --dataset_name ../llm_datasets/MATH-lighteval
+    >> $log_dir/${model_name}-mathlight-fedgrpo-0706-test.log 2>&1 
 
 ## 测试fedgrpo
 
@@ -66,7 +77,6 @@ CUDA_VISIBLE_DEVICES=0 lighteval vllm $MODEL_ARGS "custom|$TASK|0|0" \
     --custom-tasks evaluate.py \
     --use-chat-template \
     --output-dir $OUTPUT_DIR
-
 
 ## merge 7B model lora adapters
 

@@ -5,9 +5,10 @@ import pandas as pd
 import os
 
 
-def get_dataset(dataset_name, split='train', system_prompt=None):
 
-    # Check if the input is a local file or directory
+def get_dataset_new(dataset_name, split='train', system_prompt=None):
+
+     # Check if the input is a local file or directory
     if os.path.exists(dataset_name):
         print(f"Loading local dataset from: {dataset_name}")
         # Load local dataset
@@ -42,6 +43,72 @@ def get_dataset(dataset_name, split='train', system_prompt=None):
          'correctness_llama', 'finish_reasons', 'correctness_count', 'messages'])  
     
     columns = dataset.column_names
+    
+    # Check if 'problem' is in columns (may change it accordingly):
+    if 'problem' not in columns:
+        for feture in columns:
+            # 'problem', 'query' can be considered as 'problem' column
+            # (may change or add columns accordingly)
+            if feture.lower() in ['question', 'problem', 'query']:
+                dataset = dataset.rename_column(feture, 'problem')
+                break
+        else:
+            raise ValueError("No column named 'problem' in the datset!")
+    
+    # Check if 'solution' is in columns:
+    if 'solution' not in columns:
+        for feture in columns:
+            # 'answer', 'response' can be considered as 'solution' column
+            if feture.lower() in ['answer', 'solution', 'response']:
+                dataset = dataset.rename_column(feture, 'solution')
+                break
+        else:
+            raise ValueError("No column named 'solution' in the datset!")
+    
+    # if "messages" in dataset.column_names:
+    #     dataset = dataset.remove_columns("messages")
+    
+    return dataset
+
+def get_dataset(dataset_name, split='train', system_prompt=None):
+
+    # Check if the input is a local file or directory
+    if os.path.exists(dataset_name):
+        print(f"Loading local dataset from: {dataset_name}")
+        dataset = load_from_disk(dataset_name)
+        if '46k' not in dataset_name and 'train' not in dataset_name and 'test' not in dataset_name:
+            dataset = dataset['train']
+
+        # seed=42
+        # from datasets import load_from_disk
+        # if '46k' in dataset_name:
+        #     dataset = load_from_disk(dataset_name)
+        # else:
+        #     dataset = load_dataset(dataset_name)
+        #     dataset = dataset['train']
+    else:
+        print(f"Loading remote dataset from Hugging Face Hub: {dataset_name}")
+        # Change the following accordingly
+        if dataset_name == 'openai/gsm8k':
+            dataset = load_dataset(dataset_name, name='main', split=split)
+        elif dataset_name == 'opencompass/AIME2025':
+            dataset = load_dataset(dataset_name, name='AIME2025-I', split=split)
+        else:
+            dataset = load_dataset(dataset_name, split=split)
+    if '46k' in dataset_name:
+        dataset = dataset.shuffle(seed=42)
+        dataset = dataset.shard(num_shards=6, index=0)
+        print('dataset #zgx', dataset)
+        print(f"所用训练集样本数: {len(dataset)}")
+        dataset = dataset.remove_columns(['problem_type', 'question_type', \
+         'source', 'uuid','is_reasoning_complete', 'generations', 'correctness_math_verify',\
+         'correctness_llama', 'finish_reasons', 'correctness_count', 'messages'])  
+    
+    columns = dataset.column_names
+    print('#zgx column_names:', columns)
+    import pprint
+    print('#zgx Dataset example:')
+    pprint.pprint(dataset[0])
     
     # Check if 'problem' is in columns (may change it accordingly):
     if 'problem' not in columns:

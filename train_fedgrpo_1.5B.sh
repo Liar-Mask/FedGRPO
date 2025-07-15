@@ -14,10 +14,10 @@ model_name_or_path=Qwen/Qwen2.5-1.5B
 # model_name_or_path=Qwen/Qwen2.5-3B
 model_name_or_path=../llm_models/Qwen2.5-Math-1.5B
 
-model_name_or_path=../llm_models/Qwen2.5-3B
+# model_name_or_path=../llm_models/Qwen2.5-3B
 
-CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model \
- $model_name_or_path --gpu_memory_utilization 0.85 
+# CUDA_VISIBLE_DEVICES=6 trl vllm-serve --model \
+#  $model_name_or_path --gpu_memory_utilization 0.85
 
 
 # train_dataset=openai/gsm8k
@@ -38,10 +38,10 @@ eval_dataset=HuggingFaceH4/MATH-500
 
 model_name=$(basename $model_name_or_path)
 # run_name=$model_name-$(date +%Y-%m-%d)
-run_name=${model_name}_data-$(basename $train_dataset)_date-$(date +%Y-%m-%d)
+run_name=${model_name}_data-$(basename $train_dataset)_date-$(date +%Y-%m-%d)_beta0.01
 
 
-OUTPUT_DIR=output_models/$run_name
+OUTPUT_DIR=output_models/fedgrpov2_2507/$run_name
 LOG_FILE="$OUTPUT_DIR/train_log_$(date +%Y-%m-%d_%H:%M:%S.log)"
 
 mkdir -p $OUTPUT_DIR
@@ -61,7 +61,7 @@ echo
 
 MASTER_PORT=$(shuf -n 1 -i 10000-65535)
 
-export CUDA_VISIBLE_DEVICES=5,7
+export CUDA_VISIBLE_DEVICES=2,3,4,5
 # export CUDA_VISIBLE_DEVICES=2
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -73,20 +73,21 @@ export HF_HOME=../.cache/huggingface
 accelerate launch \
     --main_process_port $MASTER_PORT \
     --config_file recipes/accelerate_configs/zero2.yaml \
-    --num_processes=2 \
-GRPO.py \
-    --config recipes/Qwen2.5-Math-1.5B/config_demo_mathlight.yaml \
+    --num_processes=4 \
+FedGRPO.py \
+    --config recipes/grpo_config.yaml \
     --output_dir $OUTPUT_DIR \
     --model_name_or_path $model_name_or_path \
     --dataset_name $train_dataset \
     --num_train_epochs 1 \
     --num_generations 8 \
-    --per_device_train_batch_size 8 \
-    --per_device_eval_batch_size 12 \
+    --per_device_train_batch_size 16 \
+    --per_device_eval_batch_size 48 \
     --gradient_accumulation_steps 3 \
     --num_iterations 3 \
     --torch_empty_cache_steps 1 \
     --max_completion_length 2048 \
+    --max_num_train_samples 2000 \
     --use_vllm True \
     --vllm_gpu_memory_utilization 0.25 \
     --vllm_mode server \
@@ -101,10 +102,10 @@ GRPO.py \
     --epsilon_high 0.3 \
     --temperature 1.0 \
     --top_p 0.95 \
-    --beta 0.0001 \
+    --beta 0.01 \
     --lr_scheduler_type constant \
     --learning_rate 3e-6 \
-    --save_strategy steps \
+    --save_strategy epoch \
     --save_steps 100 \
     --log_level info \
     --wandb_project fedgrpo-$(basename $train_dataset) \
