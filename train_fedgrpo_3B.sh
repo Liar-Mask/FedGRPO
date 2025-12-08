@@ -1,8 +1,6 @@
 # Train via command line
 
-
-
-model_name_or_path=Qwen/Qwen2.5-1.5B
+# model_name_or_path=Qwen/Qwen2.5-1.5B
 # model_name_or_path=Qwen/Qwen2.5-1.5B-Instruct
 # model_name_or_path=Qwen/Qwen2.5-Math-1.5B
 # model_name_or_path=Qwen/Qwen2.5-Math-1.5B-Instruct
@@ -12,7 +10,7 @@ model_name_or_path=Qwen/Qwen2.5-1.5B
 # model_name_or_path=meta-llama/Llama-3.2-1B-Instruct
 
 # model_name_or_path=Qwen/Qwen2.5-3B
-model_name_or_path=../llm_models/Qwen2.5-Math-1.5B
+# model_name_or_path=../llm_models/Qwen2.5-Math-1.5B
 
 model_name_or_path=../llm_models/Qwen2.5-3B
 
@@ -23,6 +21,7 @@ model_name_or_path=../llm_models/Qwen2.5-3B
 # train_dataset=openai/gsm8k
 train_dataset=nlile/hendrycks-MATH-benchmark
 # train_dataset=../llm_datasets/Openr1-Math-46k-orginal
+
 # train_dataset=meta-math/MetaMathQA
 # train_dataset=SynthLabsAI/Big-Math-RL-Verified
 # train_dataset=hiyouga/math12k
@@ -36,13 +35,15 @@ train_dataset=nlile/hendrycks-MATH-benchmark
 eval_dataset=HuggingFaceH4/MATH-500
 # eval_dataset=opencompass/AIME2025
 
-
+max_num_train_samples=2000
 model_name=$(basename $model_name_or_path)
 # run_name=$model_name-$(date +%Y-%m-%d)
-run_name=${model_name}_data-$(basename $train_dataset)_date-$(date +%Y-%m-%d)
+run_name=${model_name}_data-$(basename $train_dataset)_num-${max_num_train_samples}_date-$(date +%Y-%m-%d)
 
 
-OUTPUT_DIR=output_models/fedgrpov2_2507/${run_name}
+OUTPUT_DIR=output_models/fedgrpo_ablation/${run_name}
+OUTPUT_DIR=output_models/fedgrpo_aaai_rebuttal/avg_mean/$run_name
+OUTPUT_DIR=output_models/fedgrpov2_2511_debug/$run_name
 LOG_FILE="$OUTPUT_DIR/train_log_$(date +%Y-%m-%d_%H:%M:%S.log)"
 
 mkdir -p $OUTPUT_DIR
@@ -72,7 +73,7 @@ export HF_HOME=../.cache/huggingface
 
 accelerate launch \
     --main_process_port $MASTER_PORT \
-    --config_file recipes/accelerate_configs/zero2.yaml \
+    --config_file recipes/accelerate_configs/zero3.yaml \
     --num_processes=4 \
 FedGRPO.py \
     --config recipes/grpo_config.yaml \
@@ -80,33 +81,33 @@ FedGRPO.py \
     --model_name_or_path $model_name_or_path \
     --dataset_name $train_dataset \
     --num_train_epochs 1 \
-    --num_generations 8 \
+    --num_generations 4 \
     --per_device_train_batch_size 8 \
     --per_device_eval_batch_size 12 \
-    --gradient_accumulation_steps 3 \
+    --gradient_accumulation_steps 4 \
     --num_iterations 3 \
     --torch_empty_cache_steps 1 \
-    --max_completion_length 3072 \
+    --max_completion_length 2048 \
     --use_vllm True \
-    --vllm_gpu_memory_utilization 0.15 \
+    --vllm_gpu_memory_utilization 0.3 \
     --vllm_mode server \
     --vllm_server_host 0.0.0.0 \
     --vllm_server_port 8000 \
     --reward_funcs accuracy format tag_count \
-    --reward_weights 8 1 1 \
+    --reward_weights 8 1 1\
     --loss_type bnpo \
     --scale_rewards False \
     --mask_truncated_completions True \
-    --max_num_train_samples 2000 \
+    --max_num_train_samples $max_num_train_samples \
     --epsilon 0.2 \
     --epsilon_high 0.3 \
     --temperature 1.0 \
     --top_p 0.95 \
-    --beta 0.01 \
+    --beta 0.0001 \
     --lr_scheduler_type constant \
     --learning_rate 3e-6 \
     --save_strategy epoch \
-    --save_steps 500 \
+    --save_steps 300 \
     --log_level info \
     --wandb_project fedgrpo-$(basename $train_dataset) \
     --run_name $run_name \
