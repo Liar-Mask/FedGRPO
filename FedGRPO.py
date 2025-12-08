@@ -30,7 +30,7 @@ from utils.callbacks import get_callbacks
 from utils.wandb_logging import init_wandb_training
 from trl import GRPOTrainer, ModelConfig, ScriptArguments, TrlParser, get_peft_config
 from exp_dataset.pre_datasets import get_dataset, get_dataset_fedgrpo
-from utils.trainer_1117 import FedGRPOTrainer
+from utils.trainer import FedGRPOTrainer
 
 # os.environ["WANDB_DISABLED"] = "true"
 os.environ["WANDB_MODE"] = "offline"
