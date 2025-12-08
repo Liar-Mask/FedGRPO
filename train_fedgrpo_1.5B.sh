@@ -1,7 +1,5 @@
 # Train via command line
 
-
-
 model_name_or_path=Qwen/Qwen2.5-1.5B
 # model_name_or_path=Qwen/Qwen2.5-1.5B-Instruct
 # model_name_or_path=Qwen/Qwen2.5-Math-1.5B
@@ -16,9 +14,8 @@ model_name_or_path=../llm_models/Qwen2.5-Math-1.5B
 
 # model_name_or_path=../llm_models/Qwen2.5-3B
 
-# CUDA_VISIBLE_DEVICES=6 trl vllm-serve --model \
-#  $model_name_or_path --gpu_memory_utilization 0.85
-
+# CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model \
+#  $model_name_or_path --gpu_memory_utilization 0.65
 
 # train_dataset=openai/gsm8k
 train_dataset=nlile/hendrycks-MATH-benchmark
@@ -38,10 +35,11 @@ eval_dataset=HuggingFaceH4/MATH-500
 
 model_name=$(basename $model_name_or_path)
 # run_name=$model_name-$(date +%Y-%m-%d)
-run_name=${model_name}_data-$(basename $train_dataset)_date-$(date +%Y-%m-%d)_beta0.01
+run_name=${model_name}_data-$(basename $train_dataset)_boxed_date-$(date +%Y-%m-%d)_beta0.01
 
 
-OUTPUT_DIR=output_models/fedgrpov2_2507/$run_name
+# OUTPUT_DIR=output_models/fedgrpov2_2507/$run_name
+OUTPUT_DIR=output_models/fedgrpov2_2511_debug/$run_name
 LOG_FILE="$OUTPUT_DIR/train_log_$(date +%Y-%m-%d_%H:%M:%S.log)"
 
 mkdir -p $OUTPUT_DIR
@@ -61,7 +59,7 @@ echo
 
 MASTER_PORT=$(shuf -n 1 -i 10000-65535)
 
-export CUDA_VISIBLE_DEVICES=2,3,4,5
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 # export CUDA_VISIBLE_DEVICES=2
 export TOKENIZERS_PARALLELISM=false
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -80,7 +78,7 @@ FedGRPO.py \
     --model_name_or_path $model_name_or_path \
     --dataset_name $train_dataset \
     --num_train_epochs 1 \
-    --num_generations 8 \
+    --num_generations 4 \
     --per_device_train_batch_size 16 \
     --per_device_eval_batch_size 48 \
     --gradient_accumulation_steps 3 \
@@ -93,8 +91,8 @@ FedGRPO.py \
     --vllm_mode server \
     --vllm_server_host 0.0.0.0 \
     --vllm_server_port 8000 \
-    --reward_funcs accuracy format tag_count \
-    --reward_weights 8 1 1 \
+    --reward_funcs accuracy format \
+    --reward_weights 8 1 \
     --loss_type bnpo \
     --scale_rewards False \
     --mask_truncated_completions True \
