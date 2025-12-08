@@ -1,17 +1,3 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 import logging
 import os
 import sys
@@ -23,6 +9,7 @@ import transformers
 from datasets import load_dataset, load_from_disk, concatenate_datasets
 from transformers import set_seed
 from transformers.trainer_utils import get_last_checkpoint
+from typing import Optional
 
 from configs import GRPOConfig
 from rewards import (
@@ -36,13 +23,14 @@ from rewards import (
     reasoning_steps_reward,
     tag_count_reward,
     model_reward,
+    boxed_format_reward,  # Use the modified format_reward function
 )
 from utils import get_tokenizer
 from utils.callbacks import get_callbacks
 from utils.wandb_logging import init_wandb_training
 from trl import GRPOTrainer, ModelConfig, ScriptArguments, TrlParser, get_peft_config
 from exp_dataset.pre_datasets import get_dataset, get_dataset_fedgrpo
-from utils.trainer import FedGRPOTrainer, FedGRPOTrainer_RewardModel
+from utils.trainer_1117 import FedGRPOTrainer
 
 # os.environ["WANDB_DISABLED"] = "true"
 os.environ["WANDB_MODE"] = "offline"
@@ -122,6 +110,16 @@ class GRPOScriptArguments(ScriptArguments):
         metadata={"help": "Chose certain samples for fast check"},
     )
 
+    num_clients: int = field(
+        default=10,
+        metadata={"help": "The number of federated learning clients."},
+    )
+    num_group: int = field(
+        default=2,
+        metadata={"help": "The number of selected groups from clients."},
+    )
+
+
 def main(script_args, training_args, model_args):
     # Set seed for reproducibility
     set_seed(training_args.seed)
@@ -162,38 +160,20 @@ def main(script_args, training_args, model_args):
         
         # wandb.init(project='fedgrpo')
 
-
-    # # # Load the dataset 2505
-    # if 'OpenR1' in script_args.dataset_name:
-    #     if 'client0_1' in script_args.dataset_name:
-    #         dataset1 = load_from_disk('../llm_datasets/OpenR1-Math-0.1_iid_split-n5/client_0')
-    #         dataset1 = dataset1.rename_column("response", "solution") 
-    #         dataset1 = dataset1.rename_column("instruction", "problem")
-    #         dataset2 = load_from_disk('../llm_datasets/OpenR1-Math-0.1_iid_split-n5/client_1')
-    #         dataset2 = dataset2.rename_column("response", "solution") 
-    #         dataset2 = dataset2.rename_column("instruction", "problem")
-    #         dataset = concatenate_datasets([dataset1, dataset2], axis=0)
-    #     else:
-    #         dataset = load_from_disk(script_args.dataset_name)
-    #         dataset = dataset.rename_column("response", "solution") 
-    #         dataset = dataset.rename_column("instruction", "problem")
-    #     # dataset = dataset.shard(num_shards=4, index=0)
-    # else:
-    #     # dataset1 = load_from_disk(script_args.dataset_name)
-    #     # dataset2 = load_from_disk('../llm_datasets/math_lighteval-iid-n5/client_1')
-    #     # # dataset = dataset['train']
-    #     # dataset = concatenate_datasets([dataset1, dataset2], axis=0)
-    #     # dataset = dataset.remove_columns(['type','level'])
-    #     # # dataset = dataset.shard(num_shards = 4, index = 0) # 7500/4 = 1875
-
-    #     dataset = load_from_disk(script_args.dataset_name)
-    #     dataset = dataset.remove_columns(['type','level'])
-
-    # print('dataset #zgx', dataset)
-    ## load dataset original
-
+    # dataset = get_dataset_fedgrpo(script_args.dataset_name, local_data_dir = '../llm_datasets')
     # dataset = get_dataset_fedgrpo(script_args.dataset_name, local_data_dir = '../llm_datasets')
     dataset = get_dataset(script_args.dataset_name)
+    # dataset = get_dataset_classification('facebook/anli', split='train_r1')
+
+    def assign_client_ids(example, num_clients, num_group):
+        """为每个样本分配num_group个不同的client_id"""
+        example["client_ids"] = random.sample(range(num_clients), num_group)
+        return example
+
+    dataset = dataset.map(
+        assign_client_ids, 
+        fn_kwargs={"num_clients": script_args.num_clients, "num_group": script_args.num_group}
+    )
     
     import pprint
     pprint.pprint(dataset[0])
@@ -203,7 +183,8 @@ def main(script_args, training_args, model_args):
         random.seed(training_args.seed)
         num_samples = min(script_args.max_num_train_samples, len(dataset))
         sample_ids = random.sample(range(len(dataset)), num_samples)
-        dataset = dataset.select(sample_ids)   
+        dataset = dataset.select(sample_ids) 
+      
     
 
     ################
@@ -211,7 +192,7 @@ def main(script_args, training_args, model_args):
     ################
     tokenizer = get_tokenizer(model_args, training_args)
 
-        # -----------------------------------
+    # -----------------------------------
     # # Add special tokens when necessary?
     # print("-"*100)
     # special_tokens = ["<think>", "</think>", "<answer>", "</answer>"]
@@ -225,7 +206,6 @@ def main(script_args, training_args, model_args):
     #         logger.info(f"'{token}' is already in the vocabulary.")
     # tokenizer.save_pretrained('output_models/fedgrpo_2507/tokenizer_0710')
     # print('tokenizer saved successfully!')
-
     # print("-"*100)
 
     # Get reward functions
@@ -249,6 +229,7 @@ def main(script_args, training_args, model_args):
         "code_format": get_code_format_reward(language=script_args.code_language),
         "tag_count": tag_count_reward,
         "model_reward": model_reward,
+        "boxed_format": boxed_format_reward,  # Use the modified format_reward function
     }
     reward_funcs = [REWARD_FUNCS_REGISTRY[func] for func in script_args.reward_funcs]
 
@@ -337,6 +318,7 @@ def main(script_args, training_args, model_args):
     if '14B' in model_args.model_name_or_path:
         trainer = FedGRPOTrainer(
             model=model_args.model_name_or_path,
+            reward_funcs_name=script_args.reward_funcs,
             reward_funcs=reward_funcs,
             args=training_args,
             train_dataset=dataset, #[script_args.dataset_train_split],
@@ -345,10 +327,13 @@ def main(script_args, training_args, model_args):
             peft_config = peft_config,
             callbacks=get_callbacks(training_args, model_args),
             processing_class=tokenizer,
+            num_clients=script_args.num_clients,  # FL参数
+            num_group=script_args.num_group,      # FL参数
         )
     else:
         trainer = FedGRPOTrainer(
             model=model_args.model_name_or_path,
+            reward_funcs_name=script_args.reward_funcs,
             reward_funcs=reward_funcs,
             args=training_args,
             train_dataset=dataset, #[script_args.dataset_train_split],
@@ -358,6 +343,8 @@ def main(script_args, training_args, model_args):
             # peft_config = peft_config,
             callbacks=get_callbacks(training_args, model_args),
             processing_class=tokenizer,
+            num_clients=script_args.num_clients,  # FL参数
+            num_group=script_args.num_group,      # FL参数
         ) 
         # trainer = FedGRPOTrainer_RewardModel(
         #     model=model_args.model_name_or_path,
