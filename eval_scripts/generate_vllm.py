@@ -243,14 +243,14 @@ def generate_vllm(messages, model_path, template='own', temperature=0.6, top_p=0
     # max_tokens is for the maximum length for generation.
     
 
-    # 2. (关键步骤) 检查并设置 pad_token
+    # 检查并设置 pad_token
     # Qwen系列模型通常没有默认的 pad_token，这在批量推理时可能导致问题。
     # 将其设置为 eos_token 是一个安全且常见的做法。
     # if tokenizer.pad_token is None:
     #     tokenizer.pad_token = tokenizer.eos_token
     #     print(f"pad_token 未设置, 已将其设置为 eos_token: {tokenizer.eos_token}")
 
-    # # 3. (关键步骤) 获取所有需要停止的 token ID
+    # # 获取所有需要停止的 token ID
     # # 对于Qwen Chat模型，<|im_end|> 是一个重要的停止符。
     # # 我们将它和常规的 eos_token 一起作为停止条件。
     # stop_token_ids = []
